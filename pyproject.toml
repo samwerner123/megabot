@@ -1,0 +1,13 @@
+[project]
+name = "megabot"
+version = "0.1.0"
+description = "Трендовый бот для крипты: данные, бэктест, отчёт"
+requires-python = ">=3.10"
+dependencies = ["ccxt>=4.0", "numpy>=1.24", "pandas>=2.2", "matplotlib>=3.7"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
