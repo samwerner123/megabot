@@ -58,3 +58,21 @@ def test_load_closes_builds_one_column_per_symbol(fake_exchange, tmp_path):
     closes = load_closes("fakeex", ["BTC/USDT", "ETH/USDT"], "1d", since="2021-01-01", data_dir=tmp_path)
     assert list(closes.columns) == ["BTC/USDT", "ETH/USDT"]
     assert closes.index[0] == pd.Timestamp("2021-01-01", tz="UTC")
+
+
+class WindowedLateListingExchange(FakeExchange):
+    """Как OKX: отдаёт свечи только внутри окна [since, since + 100 дней), монета листится на 250-й день."""
+
+    listing = 250
+
+    def fetch_ohlcv(self, symbol, timeframe, since, limit):
+        first = max(self.listing, (since - START + DAY - 1) // DAY)
+        last = min((since - START) // DAY + 100, self.n_candles)
+        return [[START + i * DAY, 1.0, 1.0, 1.0, 1.0, 1.0] for i in range(first, last)]
+
+
+def test_fetch_skips_empty_windows_before_listing(monkeypatch, tmp_path):
+    monkeypatch.setattr(ccxt, "windowed", WindowedLateListingExchange, raising=False)
+    df = get_ohlcv("windowed", "NEW/USDT", "1d", since="2020-01-01", data_dir=tmp_path)
+    assert df.index[0] == pd.Timestamp("2020-01-01", tz="UTC") + pd.Timedelta(days=WindowedLateListingExchange.listing)
+    assert len(df) == FakeExchange.n_candles - 1 - WindowedLateListingExchange.listing

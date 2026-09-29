@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 import numpy as np
@@ -25,10 +24,37 @@ PERIODS_PER_YEAR = {
 
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
 
+BINANCE_MARKET_DATA_URL = "https://data-api.binance.vision/api/v3"
+
+# На сколько баров сдвигаться вперёд, если биржа вернула пустой ответ.
+EMPTY_WINDOW_BARS = 100
+
 
 def cache_path(exchange_id: str, symbol: str, timeframe: str, data_dir: Path = DATA_DIR) -> Path:
     safe = symbol.replace("/", "-").replace(":", "-")
     return data_dir / exchange_id / f"{safe}_{timeframe}.csv"
+
+
+def create_exchange(exchange_id: str):
+    """Клиент ccxt только для публичных рыночных данных, без ключей."""
+    import ccxt
+
+    if not hasattr(ccxt, exchange_id):
+        raise RuntimeError(f"ccxt не знает биржу {exchange_id!r}")
+    config = {
+        "enableRateLimit": True,
+        # Учитывать HTTPS_PROXY и REQUESTS_CA_BUNDLE из окружения (корпоративные прокси и т.п.).
+        "requests_trust_env": True,
+    }
+    if exchange_id == "binance":
+        # Только спотовые рынки: фьючерсные API не нужны и закрыты в части стран.
+        config["options"] = {"fetchMarkets": ["spot"]}
+    exchange = getattr(ccxt, exchange_id)(config)
+    if exchange_id == "binance":
+        # Официальный адрес Binance только для рыночных данных. Работает и там,
+        # где основной api.binance.com недоступен.
+        exchange.urls["api"]["public"] = BINANCE_MARKET_DATA_URL
+    return exchange
 
 
 def fetch_ohlcv(exchange_id: str, symbol: str, timeframe: str = "1d", since: str = "2017-01-01") -> pd.DataFrame:
@@ -42,7 +68,7 @@ def fetch_ohlcv(exchange_id: str, symbol: str, timeframe: str = "1d", since: str
     if timeframe not in TIMEFRAME_MS:
         raise ValueError(f"Неподдерживаемый таймфрейм {timeframe!r}, доступны: {sorted(TIMEFRAME_MS)}")
 
-    exchange = getattr(ccxt, exchange_id)({"enableRateLimit": True})
+    exchange = create_exchange(exchange_id)
     tf_ms = TIMEFRAME_MS[timeframe]
     since_ms = exchange.parse8601(f"{since}T00:00:00Z")
     now_ms = exchange.milliseconds()
@@ -54,16 +80,17 @@ def fetch_ohlcv(exchange_id: str, symbol: str, timeframe: str = "1d", since: str
         except ccxt.BaseError as exc:
             raise RuntimeError(
                 f"Не удалось скачать {symbol} с {exchange_id}: {exc}\n"
-                "Если биржа недоступна из вашей страны, попробуйте другую: --exchange bybit, okx или kraken."
+                "Если биржа недоступна из вашей страны, попробуйте другую: --exchange okx, bybit или kraken."
             ) from exc
         if not batch:
-            break
+            # Некоторые биржи (OKX) отдают пустой ответ за период до листинга монеты.
+            since_ms += EMPTY_WINDOW_BARS * tf_ms
+            continue
         rows.extend(batch)
         next_since = batch[-1][0] + tf_ms
         if next_since <= since_ms:
             break
         since_ms = next_since
-        time.sleep(exchange.rateLimit / 1000)
 
     if not rows:
         raise RuntimeError(f"{exchange_id} не вернул данных по {symbol} {timeframe} с {since}")

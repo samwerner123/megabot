@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from megabot.backtest import BacktestResult
@@ -99,24 +100,26 @@ def save_chart(results: dict[str, BacktestResult], out_dir: Path, title: str) ->
         ax.spines["bottom"].set_color(BASELINE)
         ax.tick_params(which="both", colors=INK_MUTED, labelsize=8, length=0)
 
+    ends = []
     for (name, result), color in zip(results.items(), SERIES):
         equity = result.equity
         dd = drawdown(equity)
-        ax_eq.plot(equity.index, equity.values, color=color, linewidth=line_width, solid_capstyle="round", label=name)
-        ax_eq.annotate(
-            f"{name}  ×{equity.iloc[-1]:.2f}",
-            xy=(equity.index[-1], equity.iloc[-1]),
-            xytext=(6, 0),
-            textcoords="offset points",
-            va="center",
-            fontsize=8,
-            color=INK_SECONDARY,
-        )
+        label = f"{name}  ×{equity.iloc[-1]:.2f}"
+        ax_eq.plot(equity.index, equity.values, color=color, linewidth=line_width, solid_capstyle="round", label=label)
         ax_dd.plot(dd.index, dd.values, color=color, linewidth=line_width, solid_capstyle="round")
+        ends.append((label, equity.index[-1], equity.iloc[-1]))
 
     ax_eq.set_yscale("log", base=2)
     ax_eq.minorticks_off()
     ax_eq.yaxis.set_major_locator(LogLocator(base=2))
+
+    # Подписи на концах линий, только если они не налезают друг на друга;
+    # иначе итог остаётся в легенде.
+    low, high = np.log2(ax_eq.get_ylim())
+    positions = sorted((np.log2(value) - low) / (high - low) for _, _, value in ends)
+    if all(b - a > 0.05 for a, b in zip(positions, positions[1:])):
+        for label, x, value in ends:
+            ax_eq.annotate(label, xy=(x, value), xytext=(6, 0), textcoords="offset points", va="center", fontsize=8, color=INK_SECONDARY)
     ax_eq.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"×{v:g}"))
     ax_dd.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0%}"))
     ax_dd.set_ylim(top=0.0)
